@@ -6,7 +6,7 @@ import { runCliCapture, createTempConfigDir, removeTempConfigDir } from "./helpe
 
 const SEARCH_URL = "https://api.synthetic.new/v2/search";
 
-test("search uses env credentials when env and config are both set", async (t) => {
+test("search uses config credentials when env and config are both set", async (t) => {
   const configDir = await createTempConfigDir();
   t.after(() => removeTempConfigDir(configDir));
 
@@ -16,7 +16,7 @@ test("search uses env credentials when env and config are both set", async (t) =
     assert.equal(String(input), SEARCH_URL);
 
     const headers = init?.headers as Record<string, string>;
-    assert.equal(headers.Authorization, "Bearer env-key");
+    assert.equal(headers.Authorization, "Bearer config-key");
 
     return new Response(
       JSON.stringify({
@@ -37,7 +37,7 @@ test("search uses env credentials when env and config are both set", async (t) =
   assert.equal(payload.results.length, 1);
 });
 
-test("search falls back to saved config when env var is absent", async (t) => {
+test("search falls back to env var when no saved config exists", async (t) => {
   const configDir = await createTempConfigDir();
   t.after(() => removeTempConfigDir(configDir));
 

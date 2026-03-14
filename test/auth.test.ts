@@ -119,7 +119,7 @@ test("auth logout --force removes the saved key", async (t) => {
   assert.equal(getSavedApiKey({ configDir }), null);
 });
 
-test("auth status shows env source when env and config both exist", async (t) => {
+test("auth status shows config source when env and config both exist", async (t) => {
   const configDir = await createTempConfigDir();
   t.after(() => removeTempConfigDir(configDir));
 
@@ -127,7 +127,7 @@ test("auth status shows env source when env and config both exist", async (t) =>
 
   const fetchImpl: typeof fetch = async (_input, init) => {
     const headers = init?.headers as Record<string, string>;
-    assert.equal(headers.Authorization, "Bearer env-key");
+    assert.equal(headers.Authorization, "Bearer config-key");
 
     return new Response(
       JSON.stringify({
@@ -147,7 +147,7 @@ test("auth status shows env source when env and config both exist", async (t) =>
   });
 
   assert.equal(result.exitCode, 0);
-  assert.match(result.stdout, /Credential source: env/);
+  assert.match(result.stdout, /Credential source: config/);
   assert.match(result.stdout, /Validation: ok/);
   assert.match(result.stdout, /Limit: 100/);
 });

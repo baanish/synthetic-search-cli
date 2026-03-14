@@ -24,6 +24,15 @@ function normalizeKey(value: string): string {
 }
 
 export function resolveCredentials(options: AuthOptions = {}): ResolvedCredentials {
+  const savedApiKey = getSavedApiKey(options);
+
+  if (savedApiKey) {
+    return {
+      source: "config",
+      apiKey: savedApiKey,
+    };
+  }
+
   const env = options.env ?? process.env;
   const envApiKey = env.SYNTHETIC_API_KEY?.trim();
 
@@ -31,15 +40,6 @@ export function resolveCredentials(options: AuthOptions = {}): ResolvedCredentia
     return {
       source: "env",
       apiKey: envApiKey,
-    };
-  }
-
-  const savedApiKey = getSavedApiKey(options);
-
-  if (savedApiKey) {
-    return {
-      source: "config",
-      apiKey: savedApiKey,
     };
   }
 
