@@ -1,12 +1,12 @@
 {
   "name": "synthetic-search",
-  "version": "1.0.1",
+  "version": "1.0.2",
   "description": "Command-line client for Synthetic web search and quotas.",
   "license": "MIT",
   "type": "module",
   "main": "./dist/index.js",
   "bin": {
-    "synthetic-search": "./dist/index.js"
+    "synthetic-search": "dist/index.js"
   },
   "files": [
     "dist",
