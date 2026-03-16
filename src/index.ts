@@ -2,6 +2,7 @@
 
 import { confirm as promptConfirm, password as promptPassword } from "@inquirer/prompts";
 import { Command, CommanderError } from "commander";
+import { realpathSync } from "node:fs";
 import { pathToFileURL } from "node:url";
 
 import {
@@ -434,7 +435,11 @@ function isDirectExecution(): boolean {
     return false;
   }
 
-  return pathToFileURL(entry).href === import.meta.url;
+  try {
+    return pathToFileURL(realpathSync(entry)).href === import.meta.url;
+  } catch {
+    return pathToFileURL(entry).href === import.meta.url;
+  }
 }
 
 if (isDirectExecution()) {

@@ -134,13 +134,19 @@ function normalizeQuotas(rawValue: unknown): SyntheticQuotas {
   const requestsUsed = pickNumber(records, [
     "requests_used",
     "requestsUsed",
+    "requests",
     "used",
     "usage",
     "request_count",
   ]);
-  const remaining = pickNumber(records, ["remaining", "requests_remaining", "requestsRemaining"]);
+  let remaining = pickNumber(records, ["remaining", "requests_remaining", "requestsRemaining"]);
   const renewsAt =
     pickString(records, ["renews_at", "renewsAt", "reset_at", "resetAt", "resets_at"]) ?? null;
+
+  // Derive remaining from limit - requestsUsed when the API doesn't provide it directly
+  if (remaining === null && limit !== null && requestsUsed !== null) {
+    remaining = limit - requestsUsed;
+  }
 
   if (limit === null || requestsUsed === null || remaining === null) {
     throw new SyntheticCliError(
