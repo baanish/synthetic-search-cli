@@ -16,6 +16,9 @@ function createStore(configDir?: string): Conf<AuthConfig> {
   return new Conf<AuthConfig>({
     projectName: "synthetic-search",
     cwd: configDir,
+    // The store holds a plaintext API key; restrict it to the owner so it is not
+    // group/world-readable on shared machines. conf defaults to 0o666.
+    configFileMode: 0o600,
   });
 }
 

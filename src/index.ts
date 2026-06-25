@@ -2,8 +2,8 @@
 
 import { confirm as promptConfirm, password as promptPassword } from "@inquirer/prompts";
 import { Command, CommanderError } from "commander";
-import { realpathSync } from "node:fs";
-import { pathToFileURL } from "node:url";
+import { readFileSync, realpathSync } from "node:fs";
+import { fileURLToPath, pathToFileURL } from "node:url";
 
 import {
   deleteSavedApiKey,
@@ -14,7 +14,13 @@ import {
 } from "./lib/auth.js";
 import { getQuotas, search, type FetchLike } from "./lib/client.js";
 import { SyntheticCliError, SyntheticUsageError, getErrorMessage } from "./lib/errors.js";
-import { renderQuotasText, renderSearchResultsText, writeJson, writeJsonError } from "./lib/output.js";
+import {
+  renderQuotasText,
+  renderSearchResultsText,
+  sanitizeForTerminal,
+  writeJson,
+  writeJsonError,
+} from "./lib/output.js";
 
 type ReadableLike = AsyncIterable<Uint8Array | string> & {
   isTTY?: boolean;
@@ -75,6 +81,35 @@ const DEFAULT_PROMPTS: PromptApi = {
   confirm: (options) => promptConfirm(options),
 };
 
+let cachedPackageVersion: string | undefined;
+
+function getPackageVersion(): string {
+  // Memoized: package.json does not change within a process, and createProgram
+  // (which registers the version) runs on every CLI invocation and many times
+  // across the test suite.
+  if (cachedPackageVersion !== undefined) {
+    return cachedPackageVersion;
+  }
+
+  // package.json sits one level above both src/index.ts (dev) and dist/index.js
+  // (published), so this URL resolves correctly in either layout.
+  try {
+    const packageJsonUrl = new URL("../package.json", import.meta.url);
+    const raw = readFileSync(fileURLToPath(packageJsonUrl), "utf8");
+    const version = (JSON.parse(raw) as { version?: unknown }).version;
+
+    if (typeof version === "string" && version) {
+      cachedPackageVersion = version;
+      return cachedPackageVersion;
+    }
+  } catch {
+    // Fall through to the unknown sentinel below.
+  }
+
+  cachedPackageVersion = "0.0.0-unknown";
+  return cachedPackageVersion;
+}
+
 function routeRootToSearch(argv: string[]): string[] {
   const firstArg = argv[0];
 
@@ -98,7 +133,12 @@ function routeRootToSearch(argv: string[]): string[] {
 }
 
 function wantsJsonOutput(argv: string[]): boolean {
-  return argv.includes("--json");
+  // Tokens after the `--` option terminator are operands (query text), not
+  // options, so a `--json` there must not switch error output into JSON mode.
+  const terminatorIndex = argv.indexOf("--");
+  const optionTokens = terminatorIndex === -1 ? argv : argv.slice(0, terminatorIndex);
+
+  return optionTokens.includes("--json");
 }
 
 function toOutputWidth(stdout: WritableLike): number {
@@ -120,9 +160,16 @@ function parseLimit(limitValue: string | undefined): number | undefined {
     return undefined;
   }
 
+  // Require the whole token to be base-10 digits. Number.parseInt is too lax:
+  // it would silently accept "1e9" (→1), "3abc" (→3), "3.7" (→3) and leading
+  // whitespace, all of which should be usage errors rather than quiet surprises.
+  if (!/^[0-9]+$/.test(limitValue)) {
+    throw new SyntheticUsageError("--limit must be a positive integer.");
+  }
+
   const parsed = Number.parseInt(limitValue, 10);
 
-  if (!Number.isInteger(parsed) || parsed <= 0) {
+  if (!Number.isSafeInteger(parsed) || parsed <= 0) {
     throw new SyntheticUsageError("--limit must be a positive integer.");
   }
 
@@ -176,13 +223,14 @@ function applyLimit<T>(items: T[], limit: number | undefined): T[] {
 async function runSearchCommand(
   queryParts: string[],
   options: SearchCommandOptions,
-  command: Command,
   context: CommandContext,
 ): Promise<void> {
   const query = await readQueryFromInput(queryParts, context.io.stdin);
 
   if (!query) {
-    throw new SyntheticUsageError(`Query is required.\n\n${command.helpInformation()}`);
+    throw new SyntheticUsageError(
+      "Query is required. Provide it as an argument or pipe it via stdin.",
+    );
   }
 
   const limit = parseLimit(options.limit);
@@ -302,8 +350,8 @@ function registerSearchCommand(command: Command, context: CommandContext): void 
     .argument("[query...]", "Search query")
     .option("--json", "Output results as JSON")
     .option("--limit <n>", "Limit number of results")
-    .action(async (queryParts: string[] | undefined, options: SearchCommandOptions, cmd: Command) => {
-      await runSearchCommand(Array.isArray(queryParts) ? queryParts : [], options, cmd, context);
+    .action(async (queryParts: string[] | undefined, options: SearchCommandOptions) => {
+      await runSearchCommand(Array.isArray(queryParts) ? queryParts : [], options, context);
     });
 }
 
@@ -312,7 +360,8 @@ export function createProgram(context: CommandContext): Command {
 
   program
     .name("synthetic-search")
-    .description("Search the public web with Synthetic and inspect account quotas.");
+    .description("Search the public web with Synthetic and inspect account quotas.")
+    .version(getPackageVersion(), "-V, --version", "Output the version number");
 
   registerSearchCommand(
     program.command("search").description("Search the public web with Synthetic."),
@@ -352,8 +401,6 @@ export function createProgram(context: CommandContext): Command {
       await runAuthStatusCommand(context);
     });
 
-  program.showHelpAfterError();
-
   return program;
 }
 
@@ -386,18 +433,31 @@ export async function runCli(
 
   const program = createProgram(context);
 
-  program.configureOutput({
-    writeOut: (text) => {
-      io.stdout.write(text);
-    },
-    writeErr: (text) => {
-      if (!jsonMode) {
-        io.stderr.write(text);
-      }
-    },
-  });
+  // Commander applies exitOverride/configureOutput per-command, and errors
+  // raised inside a subcommand (unknown option, bad arity) are handled by that
+  // subcommand. Without this, a subcommand error would call process.exit()
+  // directly — killing the host process, bypassing the JSON error path, and
+  // writing to the real process.stderr instead of the injected io.stderr.
+  const hardenCommand = (command: Command): void => {
+    command.exitOverride();
+    command.showHelpAfterError();
+    command.configureOutput({
+      writeOut: (text) => {
+        io.stdout.write(text);
+      },
+      writeErr: (text) => {
+        if (!jsonMode) {
+          io.stderr.write(text);
+        }
+      },
+    });
 
-  program.exitOverride();
+    for (const subcommand of command.commands) {
+      hardenCommand(subcommand);
+    }
+  };
+
+  hardenCommand(program);
 
   try {
     const routedArgv = routeRootToSearch(argv);
@@ -417,7 +477,9 @@ export async function runCli(
     if (jsonMode) {
       writeJsonError(io.stderr, message);
     } else {
-      io.stderr.write(`${message}\n`);
+      // Error messages can embed untrusted upstream API response text; neutralize
+      // terminal escape sequences before writing them to stderr.
+      io.stderr.write(`${sanitizeForTerminal(message)}\n`);
     }
 
     if (error instanceof SyntheticCliError) {

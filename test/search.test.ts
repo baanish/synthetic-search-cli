@@ -186,6 +186,39 @@ test("malformed control characters in API JSON are sanitized and parsed", async 
   assert.match(payload.results[0]?.text ?? "", /hello/);
 });
 
+test("search without any configured credentials fails with a clear error", async (t) => {
+  const configDir = await createTempConfigDir();
+  t.after(() => removeTempConfigDir(configDir));
+
+  const result = await runCliCapture(["search", "hello", "--json"], {
+    configDir,
+    env: {},
+    fetchImpl: async () => {
+      throw new Error("fetch should not run without credentials");
+    },
+  });
+
+  assert.equal(result.exitCode, 1);
+  const errorPayload = JSON.parse(result.stderr) as { error: string };
+  assert.match(errorPayload.error, /No Synthetic API key configured/);
+});
+
+test("search surfaces an API error body to stderr as JSON in --json mode", async (t) => {
+  const configDir = await createTempConfigDir();
+  t.after(() => removeTempConfigDir(configDir));
+  saveApiKey("config-key", { configDir });
+
+  const result = await runCliCapture(["search", "hello", "--json"], {
+    configDir,
+    env: {},
+    fetchImpl: async () => new Response(JSON.stringify({ error: "rate limited" }), { status: 429 }),
+  });
+
+  assert.equal(result.exitCode, 1);
+  const errorPayload = JSON.parse(result.stderr) as { error: string };
+  assert.match(errorPayload.error, /status 429: rate limited/);
+});
+
 test("missing results array surfaces a clear error and non-zero exit", async (t) => {
   const configDir = await createTempConfigDir();
   t.after(() => removeTempConfigDir(configDir));

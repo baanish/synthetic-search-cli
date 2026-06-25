@@ -1,6 +1,6 @@
 {
   "name": "synthetic-search",
-  "version": "1.0.4",
+  "version": "1.1.0",
   "description": "Command-line client for Synthetic web search and quotas.",
   "license": "MIT",
   "type": "module",
@@ -18,9 +18,11 @@
   },
   "scripts": {
     "build": "tsc -p tsconfig.json",
+    "typecheck": "tsc -p tsconfig.typecheck.json",
     "dev": "tsx src/index.ts",
     "start": "node dist/index.js",
     "test": "tsx --test test/*.test.ts",
+    "fuzz": "tsx scripts/fuzz.ts",
     "prepare": "npm run build"
   },
   "keywords": [

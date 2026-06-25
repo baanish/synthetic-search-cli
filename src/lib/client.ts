@@ -1,10 +1,21 @@
-import type { SyntheticQuotas, SyntheticSearchResponse, SyntheticSearchResult } from "../types.js";
+import type {
+  SyntheticQuotaBucket,
+  SyntheticQuotas,
+  SyntheticSearchResponse,
+  SyntheticSearchResult,
+} from "../types.js";
 import { SyntheticApiError, SyntheticCliError, getErrorMessage } from "./errors.js";
 import { parseSyntheticJson, truncateText, tryParseSyntheticJson } from "./json.js";
 
 const SYNTHETIC_SEARCH_URL = "https://api.synthetic.new/v2/search";
 const SYNTHETIC_QUOTAS_URL = "https://api.synthetic.new/v2/quotas";
 const MAX_TEXT_LENGTH = 2000;
+// Bound the remaining attacker-controlled fields too. Unbounded title/url could
+// otherwise carry multi-megabyte payloads into terminal-sanitization on the
+// render path; these caps keep that work linear and the values sane.
+const MAX_TITLE_LENGTH = 1000;
+const MAX_URL_LENGTH = 2048;
+const MAX_PUBLISHED_LENGTH = 100;
 
 export type FetchLike = typeof fetch;
 
@@ -24,10 +35,10 @@ function normalizeResult(rawResult: unknown): SyntheticSearchResult | null {
   }
 
   return {
-    url,
-    title,
+    url: truncateText(url, MAX_URL_LENGTH),
+    title: truncateText(title, MAX_TITLE_LENGTH),
     text: truncateText(text, MAX_TEXT_LENGTH),
-    published,
+    published: published === null ? null : truncateText(published, MAX_PUBLISHED_LENGTH),
   };
 }
 
@@ -122,44 +133,100 @@ function pickString(records: Record<string, unknown>[], keys: string[]): string 
   return null;
 }
 
+// Build one coherent quota bucket from a SINGLE object, reading every field from
+// THAT object only — so a bucket's numbers can never be stitched together from
+// different records. Returns null unless the object yields a usable limit plus a
+// usage figure (taken directly, or derived from limit - remaining).
+//
+// Reporting policy (deliberate, owned):
+//   - `requestsUsed` is reported faithfully and is NOT clamped: an over-quota
+//     bucket shows used > limit rather than hiding how far over it is.
+//   - `remaining` is taken from the API when present, else derived as
+//     limit - used, and is always floored at 0 (never a negative figure).
+//   - A server-reported `remaining` is trusted verbatim (beyond the 0 floor); it
+//     is the authoritative figure even if it disagrees with limit - used.
+function buildBucket(value: unknown, key: string, label: string): SyntheticQuotaBucket | null {
+  if (typeof value !== "object" || value === null || Array.isArray(value)) {
+    return null;
+  }
+
+  const records = [value as Record<string, unknown>];
+  const limit = pickNumber(records, ["limit", "request_limit", "requests_limit", "quota_limit"]);
+
+  if (limit === null) {
+    return null;
+  }
+
+  const reportedRemaining = pickNumber(records, ["remaining", "requests_remaining", "requestsRemaining"]);
+  let requestsUsed = pickNumber(records, [
+    "requests",
+    "requests_used",
+    "requestsUsed",
+    "used",
+    "usage",
+    "request_count",
+  ]);
+
+  // Derive usage from a reported remaining when the usage key itself is absent.
+  if (requestsUsed === null && reportedRemaining !== null) {
+    requestsUsed = Math.max(0, limit - reportedRemaining);
+  }
+
+  if (requestsUsed === null) {
+    return null;
+  }
+
+  const remaining = reportedRemaining ?? limit - requestsUsed;
+  const renewsAt = pickString(records, ["renewsAt", "renews_at", "reset_at", "resetAt", "resets_at"]) ?? null;
+
+  return { key, label, limit, requestsUsed, remaining: Math.max(0, remaining), renewsAt };
+}
+
 function normalizeQuotas(rawValue: unknown): SyntheticQuotas {
   if (typeof rawValue !== "object" || rawValue === null || Array.isArray(rawValue)) {
     throw new SyntheticCliError("Synthetic API quotas response did not include a valid JSON object.");
   }
 
   const raw = rawValue as Record<string, unknown>;
-  const records = getNestedRecords(raw);
+  const buckets: SyntheticQuotaBucket[] = [];
 
-  const limit = pickNumber(records, ["limit", "request_limit", "requests_limit", "quota_limit"]);
-  const requestsUsed = pickNumber(records, [
-    "requests_used",
-    "requestsUsed",
-    "requests",
-    "used",
-    "usage",
-    "request_count",
-  ]);
-  let remaining = pickNumber(records, ["remaining", "requests_remaining", "requestsRemaining"]);
-  const renewsAt =
-    pickString(records, ["renews_at", "renewsAt", "reset_at", "resetAt", "resets_at"]) ?? null;
-
-  // Derive remaining from limit - requestsUsed when the API doesn't provide it directly
-  if (remaining === null && limit !== null && requestsUsed !== null) {
-    remaining = limit - requestsUsed;
+  // Reporting policy: this is a search CLI, so the search hourly bucket — the
+  // quota that actually constrains searches — is reported FIRST, followed by the
+  // documented account-level subscription bucket. (The /v2/quotas response also
+  // carries weeklyTokenLimit/rollingFiveHourLimit buckets; those are intentionally
+  // not surfaced.) Each bucket is read coherently from its own object.
+  const searchHourly = (raw.search as Record<string, unknown> | undefined)?.hourly;
+  const searchBucket = buildBucket(searchHourly, "search", "Search (hourly)");
+  if (searchBucket) {
+    buckets.push(searchBucket);
   }
 
-  if (limit === null || requestsUsed === null || remaining === null) {
+  const subscriptionBucket = buildBucket(raw.subscription, "subscription", "Subscription");
+  if (subscriptionBucket) {
+    buckets.push(subscriptionBucket);
+  }
+
+  // Fallback for an unrecognized/reshaped response: try the raw object and its
+  // common nested wrappers, using the FIRST one that yields a coherent bucket on
+  // its own. Each candidate is read from a single object, so the fallback can
+  // never stitch a bucket together from fields in different records.
+  if (buckets.length === 0) {
+    for (const record of getNestedRecords(raw)) {
+      const fallback = buildBucket(record, "subscription", "Subscription");
+      if (fallback) {
+        buckets.push(fallback);
+        break;
+      }
+    }
+  }
+
+  if (buckets.length === 0) {
     throw new SyntheticCliError(
       "Synthetic API quotas response did not include valid limit, requests used, and remaining values.",
     );
   }
 
-  return {
-    limit,
-    requestsUsed,
-    remaining,
-    renewsAt,
-  };
+  return { buckets };
 }
 
 async function syntheticFetch(
@@ -202,13 +269,13 @@ export async function search(
     throw new SyntheticApiError(formatApiError(response.status, rawText), response.status);
   }
 
-  const parsed = parseSyntheticJson<SyntheticSearchResponse>(rawText);
+  const parsed = parseSyntheticJson<unknown>(rawText);
 
-  if (!Array.isArray(parsed.results)) {
+  if (typeof parsed !== "object" || parsed === null || !Array.isArray((parsed as SyntheticSearchResponse).results)) {
     throw new SyntheticCliError("Synthetic API response did not include a valid results array.");
   }
 
-  return parsed.results
+  return (parsed as { results: unknown[] }).results
     .map((result) => normalizeResult(result))
     .filter((result): result is SyntheticSearchResult => result !== null);
 }
