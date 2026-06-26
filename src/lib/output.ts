@@ -26,9 +26,19 @@ const TERMINAL_ESCAPE_SEQUENCES = new RegExp(
   "g",
 );
 const TERMINAL_CONTROL_CHARS = new RegExp("[\\u0000-\\u001f\\u007f-\\u009f]", "g");
+// Same, but preserving tab (0x09) and newline (0x0a) — the legitimate layout
+// whitespace in multi-line help/usage text. CR/ESC/BEL/C1 are still stripped.
+const TERMINAL_CONTROL_CHARS_KEEP_LAYOUT = new RegExp(
+  "[\\u0000-\\u0008\\u000b-\\u001f\\u007f-\\u009f]",
+  "g",
+);
 
-export function sanitizeForTerminal(value: string): string {
-  return value.replace(TERMINAL_ESCAPE_SEQUENCES, "").replace(TERMINAL_CONTROL_CHARS, " ");
+export function sanitizeForTerminal(value: string, options: { preserveLayout?: boolean } = {}): string {
+  const controlChars = options.preserveLayout
+    ? TERMINAL_CONTROL_CHARS_KEEP_LAYOUT
+    : TERMINAL_CONTROL_CHARS;
+
+  return value.replace(TERMINAL_ESCAPE_SEQUENCES, "").replace(controlChars, " ");
 }
 
 function wrapText(text: string, width: number): string {

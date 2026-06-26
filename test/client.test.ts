@@ -46,6 +46,41 @@ test("search surfaces a formatted API error on a 4xx response with a JSON error 
   );
 });
 
+test("an upstream error body that reflects the API key is redacted before display", async () => {
+  const key = "syn_secret_key_value_abcdef123456";
+  const body = JSON.stringify({ error: `rejected token: Bearer ${key}` });
+
+  await assert.rejects(
+    () => search("q", key, jsonFetch(body, 401)),
+    (error: unknown) => {
+      assert.ok(error instanceof SyntheticApiError);
+      assert.doesNotMatch((error as Error).message, /syn_secret_key_value_abcdef123456/);
+      assert.match((error as Error).message, /\[redacted\]/);
+      return true;
+    },
+  );
+});
+
+test("getQuotas rejects an over-sized response declared via content-length", async () => {
+  const oversized = (async () =>
+    ({
+      ok: true,
+      status: 200,
+      headers: { get: (h: string) => (h.toLowerCase() === "content-length" ? String(64 * 1024 * 1024) : null) },
+      body: null,
+      text: async () => "{}",
+    }) as unknown as Response) as unknown as typeof fetch;
+
+  await assert.rejects(
+    () => getQuotas("key", oversized),
+    (error: unknown) => {
+      assert.ok(error instanceof SyntheticApiError);
+      assert.match((error as Error).message, /exceeded/);
+      return true;
+    },
+  );
+});
+
 test("search wraps a network/transport failure in a SyntheticApiError", async () => {
   const failingFetch = (async () => {
     throw new Error("ECONNREFUSED");

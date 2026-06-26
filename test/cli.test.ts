@@ -80,6 +80,28 @@ test("subcommand usage errors write to the injected stderr, not the real process
   assert.match(result.stderr, /unknown option/);
 });
 
+test("commander usage errors sanitize terminal escapes from the option name (text mode)", async (t) => {
+  const configDir = await createTempConfigDir();
+  t.after(() => removeTempConfigDir(configDir));
+  saveApiKey("config-key", { configDir });
+
+  const result = await runCliCapture(["search", "hi", `--${ESC}[2Jbogus`], {
+    configDir,
+    env: {},
+    stdoutIsTTY: true,
+    stderrIsTTY: true,
+    fetchImpl: async () => {
+      throw new Error("fetch should not run for a usage error");
+    },
+  });
+
+  assert.equal(result.exitCode, 1);
+  assert.ok(!result.stderr.includes(ESC), "ESC byte must not reach stderr");
+  assert.match(result.stderr, /unknown option/);
+  // Help/usage layout (newlines) is preserved by the layout-aware sanitizer.
+  assert.ok(result.stderr.includes("\n"));
+});
+
 test("--limit rejects exponent notation instead of silently parsing 1e9 as 1", async (t) => {
   const configDir = await createTempConfigDir();
   t.after(() => removeTempConfigDir(configDir));

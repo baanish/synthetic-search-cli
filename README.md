@@ -135,9 +135,15 @@ synthetic-search --version
 
 - A key saved with `auth login` is written to the local config file with
   owner-only (`0600`) permissions; a file left looser by an older version is
-  tightened the next time the CLI opens it.
-- Untrusted text in search results is sanitized of terminal escape sequences
-  before being printed, so a result cannot manipulate your terminal.
+  tightened the next time the CLI opens it (with a warning if it cannot be).
+- Untrusted text printed to the terminal — search results, quota fields, and
+  error messages (including Commander usage errors) — is sanitized of terminal
+  escape sequences, so a result or upstream error cannot manipulate your
+  terminal. `--json` output is escaped to stay terminal-safe too.
+- Upstream API error bodies are redacted of the active key / bearer-token-like
+  material before being shown or logged.
+- Response bodies and piped stdin are read with size bounds to prevent a hostile
+  upstream or an unbounded pipe from exhausting memory.
 
 ## API Endpoints
 

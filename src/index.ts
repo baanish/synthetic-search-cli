@@ -176,6 +176,10 @@ function parseLimit(limitValue: string | undefined): number | undefined {
   return parsed;
 }
 
+// A search query is tiny; cap the piped stdin we will buffer so an unbounded or
+// never-ending pipe cannot exhaust the process's memory.
+const MAX_STDIN_BYTES = 1024 * 1024;
+
 async function readQueryFromInput(queryParts: string[], stdin: ReadableLike): Promise<string | null> {
   if (queryParts.length > 0) {
     const joinedQuery = queryParts.join(" ").trim();
@@ -190,6 +194,10 @@ async function readQueryFromInput(queryParts: string[], stdin: ReadableLike): Pr
 
   for await (const chunk of stdin) {
     body += typeof chunk === "string" ? chunk : Buffer.from(chunk).toString("utf8");
+
+    if (Buffer.byteLength(body, "utf8") > MAX_STDIN_BYTES) {
+      throw new SyntheticUsageError("Piped query is too large (1 MiB limit).");
+    }
   }
 
   const trimmed = body.trim();
@@ -447,7 +455,10 @@ export async function runCli(
       },
       writeErr: (text) => {
         if (!jsonMode) {
-          io.stderr.write(text);
+          // Commander usage errors echo attacker-controlled option/argument text
+          // (e.g. an unknown option name); neutralize terminal escapes while
+          // preserving the multi-line layout of help/usage output.
+          io.stderr.write(sanitizeForTerminal(text, { preserveLayout: true }));
         }
       },
     });

@@ -15,6 +15,10 @@ const SYNTHETIC_QUOTAS_URL = "https://api.synthetic.new/v2/quotas";
 // depend on length (the renderer's sanitizer is linear), so there is no need to
 // truncate them in the normalized data.
 const MAX_TEXT_LENGTH = 2000;
+// Upper bound on a response body we will buffer. The real API responses are
+// kilobytes; this only guards against a hostile/compromised upstream (or proxy)
+// streaming an unbounded body to exhaust memory.
+const MAX_RESPONSE_BYTES = 32 * 1024 * 1024;
 
 export type FetchLike = typeof fetch;
 
@@ -41,7 +45,21 @@ function normalizeResult(rawResult: unknown): SyntheticSearchResult | null {
   };
 }
 
-function formatApiError(status: number, bodyText: string): string {
+// Upstream error bodies are echoed into user-facing errors (and thus into the
+// terminal / CI logs). A hostile or misconfigured upstream/proxy could reflect
+// the bearer credential back; strip the active key and bearer-token-like
+// material before it is ever displayed or logged.
+function redactSecrets(text: string, apiKey: string): string {
+  let redacted = apiKey ? text.split(apiKey).join("[redacted]") : text;
+
+  redacted = redacted
+    .replace(/Bearer\s+[\w.\-~+/]+=*/gi, "Bearer [redacted]")
+    .replace(/\bsyn_[\w.\-]+/g, "[redacted]");
+
+  return redacted;
+}
+
+function formatApiError(status: number, bodyText: string, apiKey: string): string {
   const body = bodyText.trim();
 
   if (!body) {
@@ -59,11 +77,14 @@ function formatApiError(status: number, bodyText: string): string {
           : null;
 
     if (message) {
-      return `Synthetic API request failed with status ${status}: ${message}`;
+      return redactSecrets(`Synthetic API request failed with status ${status}: ${message}`, apiKey);
     }
   }
 
-  return `Synthetic API request failed with status ${status}: ${truncateText(body, 400)}`;
+  return redactSecrets(
+    `Synthetic API request failed with status ${status}: ${truncateText(body, 400)}`,
+    apiKey,
+  );
 }
 
 function coerceNumber(value: unknown): number | null {
@@ -228,20 +249,65 @@ function normalizeQuotas(rawValue: unknown): SyntheticQuotas {
   return { buckets };
 }
 
+// Read a response body with an upper byte bound so a hostile upstream cannot
+// exhaust memory with an unbounded stream. Streams when possible (aborting once
+// the cap is crossed); falls back to a buffered read with a post-check for
+// Response objects without a readable body.
+async function readBoundedText(response: Response): Promise<string> {
+  const declared = Number(response.headers.get("content-length"));
+  if (Number.isFinite(declared) && declared > MAX_RESPONSE_BYTES) {
+    throw new SyntheticApiError(`Synthetic API response exceeded the ${MAX_RESPONSE_BYTES}-byte limit.`);
+  }
+
+  const body = response.body as ReadableStream<Uint8Array> | null;
+  if (!body || typeof body.getReader !== "function") {
+    const text = await response.text();
+    if (Buffer.byteLength(text, "utf8") > MAX_RESPONSE_BYTES) {
+      throw new SyntheticApiError(`Synthetic API response exceeded the ${MAX_RESPONSE_BYTES}-byte limit.`);
+    }
+    return text;
+  }
+
+  const reader = body.getReader();
+  const chunks: Uint8Array[] = [];
+  let total = 0;
+
+  for (;;) {
+    const { done, value } = await reader.read();
+    if (done) {
+      break;
+    }
+
+    if (value) {
+      total += value.byteLength;
+      if (total > MAX_RESPONSE_BYTES) {
+        await reader.cancel();
+        throw new SyntheticApiError(`Synthetic API response exceeded the ${MAX_RESPONSE_BYTES}-byte limit.`);
+      }
+      chunks.push(value);
+    }
+  }
+
+  return Buffer.concat(chunks).toString("utf8");
+}
+
 async function syntheticFetch(
   url: string,
   init: RequestInit,
   fetchImpl: FetchLike,
+  apiKey: string,
 ): Promise<{ response: Response; rawText: string }> {
   let response: Response;
 
   try {
     response = await fetchImpl(url, init);
   } catch (error) {
-    throw new SyntheticApiError(`Synthetic API request failed: ${getErrorMessage(error)}`);
+    throw new SyntheticApiError(
+      redactSecrets(`Synthetic API request failed: ${getErrorMessage(error)}`, apiKey),
+    );
   }
 
-  const rawText = await response.text();
+  const rawText = await readBoundedText(response);
 
   return { response, rawText };
 }
@@ -262,10 +328,11 @@ export async function search(
       body: JSON.stringify({ query }),
     },
     fetchImpl,
+    apiKey,
   );
 
   if (!response.ok) {
-    throw new SyntheticApiError(formatApiError(response.status, rawText), response.status);
+    throw new SyntheticApiError(formatApiError(response.status, rawText, apiKey), response.status);
   }
 
   const parsed = parseSyntheticJson<unknown>(rawText);
@@ -289,10 +356,11 @@ export async function getQuotas(apiKey: string, fetchImpl: FetchLike = fetch): P
       },
     },
     fetchImpl,
+    apiKey,
   );
 
   if (!response.ok) {
-    throw new SyntheticApiError(formatApiError(response.status, rawText), response.status);
+    throw new SyntheticApiError(formatApiError(response.status, rawText, apiKey), response.status);
   }
 
   const parsed = parseSyntheticJson<unknown>(rawText);

@@ -186,6 +186,29 @@ test("malformed control characters in API JSON are sanitized and parsed", async 
   assert.match(payload.results[0]?.text ?? "", /hello/);
 });
 
+test("an oversized piped query is rejected before any network call", async (t) => {
+  const configDir = await createTempConfigDir();
+  t.after(() => removeTempConfigDir(configDir));
+  saveApiKey("config-key", { configDir });
+
+  let fetched = false;
+  const result = await runCliCapture(["search", "--json"], {
+    configDir,
+    env: {},
+    stdinText: "x".repeat(1024 * 1024 + 16),
+    stdinIsTTY: false,
+    fetchImpl: async () => {
+      fetched = true;
+      return new Response(JSON.stringify({ results: [] }), { status: 200 });
+    },
+  });
+
+  assert.equal(result.exitCode, 1);
+  assert.equal(fetched, false);
+  const errorPayload = JSON.parse(result.stderr) as { error: string };
+  assert.match(errorPayload.error, /too large/);
+});
+
 test("search without any configured credentials fails with a clear error", async (t) => {
   const configDir = await createTempConfigDir();
   t.after(() => removeTempConfigDir(configDir));

@@ -1,8 +1,38 @@
 import Conf from "conf";
-import { chmodSync, existsSync } from "node:fs";
+import { chmodSync, existsSync, statSync } from "node:fs";
 
 import type { ResolvedCredentials } from "../types.js";
 import { SyntheticUsageError } from "./errors.js";
+
+let credentialPermissionWarned = false;
+
+// If the credential file is still group/world-accessible after the chmod attempt
+// (e.g. on a filesystem that rejected it), warn the user once with a concrete
+// remediation rather than silently using an exposed key. We warn instead of
+// failing closed so the CLI keeps working on platforms without POSIX permissions
+// (Windows) or quirky filesystems; the message goes straight to process.stderr
+// because it is a security advisory that must surface regardless of --json mode.
+function warnIfCredentialFileExposed(path: string): void {
+  if (credentialPermissionWarned || process.platform === "win32") {
+    return;
+  }
+
+  try {
+    if (!existsSync(path)) {
+      return;
+    }
+
+    if ((statSync(path).mode & 0o077) !== 0) {
+      credentialPermissionWarned = true;
+      process.stderr.write(
+        `Warning: saved API key file ${path} is accessible to other users and could not be restricted. ` +
+          `Run: chmod 600 ${path}\n`,
+      );
+    }
+  } catch {
+    // Ignore — the warning is best-effort.
+  }
+}
 
 type AuthConfig = {
   apiKey?: string;
@@ -33,6 +63,8 @@ function createStore(configDir?: string): Conf<AuthConfig> {
   } catch {
     // Ignore — restrictive permissions are a hardening step, not a hard requirement.
   }
+
+  warnIfCredentialFileExposed(store.path);
 
   return store;
 }
