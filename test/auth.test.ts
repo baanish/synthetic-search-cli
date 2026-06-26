@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { statSync } from "node:fs";
+import { chmodSync, statSync } from "node:fs";
 import { platform } from "node:os";
 import test from "node:test";
 
@@ -21,6 +21,21 @@ test("saved credential file is created with owner-only (0600) permissions", { sk
 
   const mode = statSync(configFilePath(configDir)).mode & 0o777;
   assert.equal(mode, 0o600, `expected 0600, got 0o${mode.toString(8)}`);
+});
+
+test("opening an existing loosely-permissioned credential file tightens it to 0600", { skip: platform() === "win32" }, async (t) => {
+  const configDir = await createTempConfigDir();
+  t.after(() => removeTempConfigDir(configDir));
+
+  saveApiKey("upgraded-key", { configDir });
+  const file = configFilePath(configDir);
+  // Simulate a file left behind by an older version that created it 0644.
+  chmodSync(file, 0o644);
+  assert.equal(statSync(file).mode & 0o777, 0o644);
+
+  // Any operation that opens the store must tighten it.
+  assert.equal(getSavedApiKey({ configDir }), "upgraded-key");
+  assert.equal(statSync(file).mode & 0o777, 0o600);
 });
 
 test("maskApiKey reveals only the first and last four characters of a long key", () => {

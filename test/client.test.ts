@@ -23,6 +23,17 @@ test("search throws a clear SyntheticCliError when the response is not a JSON ob
   }
 });
 
+test("search preserves a long url in full (JSON consumers need fetchable values)", async () => {
+  const longUrl = `https://example.com/path?q=${"x".repeat(3000)}`;
+  const body = JSON.stringify({ results: [{ url: longUrl, title: "T", text: "body" }] });
+
+  const results = await search("q", "key", jsonFetch(body));
+
+  assert.equal(results.length, 1);
+  assert.equal(results[0]?.url, longUrl);
+  assert.ok((results[0]?.url.length ?? 0) > 2048, "url must not be truncated");
+});
+
 test("search surfaces a formatted API error on a 4xx response with a JSON error body", async () => {
   await assert.rejects(
     () => search("q", "key", jsonFetch(JSON.stringify({ error: "bad request" }), 400)),

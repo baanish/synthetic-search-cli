@@ -134,7 +134,8 @@ synthetic-search --version
 ## Security
 
 - A key saved with `auth login` is written to the local config file with
-  owner-only (`0600`) permissions.
+  owner-only (`0600`) permissions; a file left looser by an older version is
+  tightened the next time the CLI opens it.
 - Untrusted text in search results is sanitized of terminal escape sequences
   before being printed, so a result cannot manipulate your terminal.
 

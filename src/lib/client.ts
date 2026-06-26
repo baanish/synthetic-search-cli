@@ -9,13 +9,12 @@ import { parseSyntheticJson, truncateText, tryParseSyntheticJson } from "./json.
 
 const SYNTHETIC_SEARCH_URL = "https://api.synthetic.new/v2/search";
 const SYNTHETIC_QUOTAS_URL = "https://api.synthetic.new/v2/quotas";
+// `text` is a body preview, so it is capped here (it has always been). The
+// identifying fields (url, title, published) are kept in FULL so `--json`
+// consumers get faithful, fetchable values; terminal-injection safety does not
+// depend on length (the renderer's sanitizer is linear), so there is no need to
+// truncate them in the normalized data.
 const MAX_TEXT_LENGTH = 2000;
-// Bound the remaining attacker-controlled fields too. Unbounded title/url could
-// otherwise carry multi-megabyte payloads into terminal-sanitization on the
-// render path; these caps keep that work linear and the values sane.
-const MAX_TITLE_LENGTH = 1000;
-const MAX_URL_LENGTH = 2048;
-const MAX_PUBLISHED_LENGTH = 100;
 
 export type FetchLike = typeof fetch;
 
@@ -35,10 +34,10 @@ function normalizeResult(rawResult: unknown): SyntheticSearchResult | null {
   }
 
   return {
-    url: truncateText(url, MAX_URL_LENGTH),
-    title: truncateText(title, MAX_TITLE_LENGTH),
+    url,
+    title,
     text: truncateText(text, MAX_TEXT_LENGTH),
-    published: published === null ? null : truncateText(published, MAX_PUBLISHED_LENGTH),
+    published,
   };
 }
 
