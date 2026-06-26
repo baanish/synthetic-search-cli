@@ -3,6 +3,12 @@ import { chmodSync, existsSync, statSync } from "node:fs";
 
 import type { ResolvedCredentials } from "../types.js";
 import { SyntheticUsageError } from "./errors.js";
+import { sanitizeForTerminal } from "./output.js";
+
+// POSIX single-quote a string so it is safe to paste into a shell command.
+function shellQuote(value: string): string {
+  return `'${value.split("'").join("'\\''")}'`;
+}
 
 let credentialPermissionWarned = false;
 
@@ -24,10 +30,12 @@ function warnIfCredentialFileExposed(path: string): void {
 
     if ((statSync(path).mode & 0o077) !== 0) {
       credentialPermissionWarned = true;
-      process.stderr.write(
+      // The path may contain spaces/shell metacharacters/control bytes: shell-quote
+      // the chmod argument and neutralize terminal escapes in the whole message.
+      const message =
         `Warning: saved API key file ${path} is accessible to other users and could not be restricted. ` +
-          `Run: chmod 600 ${path}\n`,
-      );
+        `Run: chmod 600 ${shellQuote(path)}`;
+      process.stderr.write(`${sanitizeForTerminal(message)}\n`);
     }
   } catch {
     // Ignore — the warning is best-effort.

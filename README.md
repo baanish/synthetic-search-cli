@@ -108,7 +108,7 @@ Quotas are reported per bucket. The **search (hourly)** bucket — the limit tha
 actually constrains searches — is shown first, followed by the account
 **subscription** bucket:
 
-```
+```text
 Search (hourly):
   Limit: 250
   Requests used: 38

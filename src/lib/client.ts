@@ -77,14 +77,17 @@ function formatApiError(status: number, bodyText: string, apiKey: string): strin
           : null;
 
     if (message) {
-      return redactSecrets(`Synthetic API request failed with status ${status}: ${message}`, apiKey);
+      return `Synthetic API request failed with status ${status}: ${truncateText(
+        redactSecrets(message, apiKey),
+        400,
+      )}`;
     }
   }
 
-  return redactSecrets(
-    `Synthetic API request failed with status ${status}: ${truncateText(body, 400)}`,
-    apiKey,
-  );
+  return `Synthetic API request failed with status ${status}: ${truncateText(
+    redactSecrets(body, apiKey),
+    400,
+  )}`;
 }
 
 function coerceNumber(value: unknown): number | null {

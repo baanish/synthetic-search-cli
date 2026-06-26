@@ -112,6 +112,19 @@ test("renderQuotasText strips control characters from an API-supplied renewsAt",
   assert.match(rendered, /Limit: 10/);
 });
 
+test("renderQuotasText sanitizes terminal escapes in a bucket label", () => {
+  const quotas: SyntheticQuotas = {
+    buckets: [
+      { key: "x", label: `Lab${ESC}[2Jel`, limit: 1, requestsUsed: 0, remaining: 1, renewsAt: null },
+    ],
+  };
+
+  const rendered = renderQuotasText(quotas);
+
+  assert.doesNotMatch(rendered, FORBIDDEN_CONTROL);
+  assert.ok(!rendered.includes(ESC));
+});
+
 test("renderQuotasText renders multiple buckets with labels", () => {
   const quotas: SyntheticQuotas = {
     buckets: [

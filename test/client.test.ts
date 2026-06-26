@@ -61,6 +61,20 @@ test("an upstream error body that reflects the API key is redacted before displa
   );
 });
 
+test("a huge structured upstream error message is truncated before display", async () => {
+  const body = JSON.stringify({ error: "E".repeat(5000) });
+
+  await assert.rejects(
+    () => search("q", "key", jsonFetch(body, 400)),
+    (error: unknown) => {
+      assert.ok(error instanceof SyntheticApiError);
+      assert.ok((error as Error).message.length < 500, `unexpected length ${(error as Error).message.length}`);
+      assert.match((error as Error).message, /\.\.\.$/);
+      return true;
+    },
+  );
+});
+
 test("getQuotas rejects an over-sized response declared via content-length", async () => {
   const oversized = (async () =>
     ({

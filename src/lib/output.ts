@@ -100,7 +100,7 @@ export function renderQuotasText(quotas: SyntheticQuotas): string {
   return quotas.buckets
     .map((bucket) =>
       [
-        `${bucket.label}:`,
+        `${sanitizeForTerminal(bucket.label)}:`,
         `  Limit: ${bucket.limit}`,
         `  Requests used: ${bucket.requestsUsed}`,
         `  Remaining: ${bucket.remaining}`,
