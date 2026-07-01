@@ -5,6 +5,13 @@ import { Readable } from "node:stream";
 
 import { runCli, type CliIO, type RunCliOptions } from "../src/index.ts";
 
+// conf writes its store directly to <configDir>/config.json when `cwd` is set
+// (as the CLI does in tests). Tests that inspect the stored credential file on
+// disk use this path.
+export function configFilePath(configDir: string): string {
+  return join(configDir, "config.json");
+}
+
 class MemoryWritable {
   buffer = "";
   isTTY = true;
@@ -24,6 +31,7 @@ type RunCliCaptureOptions = {
   stdinText?: string;
   stdinIsTTY?: boolean;
   stdoutIsTTY?: boolean;
+  stderrIsTTY?: boolean;
 };
 
 export async function createTempConfigDir(): Promise<string> {
@@ -42,7 +50,7 @@ export async function runCliCapture(
   const stderr = new MemoryWritable();
 
   stdout.isTTY = options.stdoutIsTTY ?? true;
-  stderr.isTTY = options.stdoutIsTTY ?? true;
+  stderr.isTTY = options.stderrIsTTY ?? options.stdoutIsTTY ?? true;
 
   const stdin = Readable.from(options.stdinText ? [options.stdinText] : []);
   (stdin as Readable & { isTTY?: boolean }).isTTY = options.stdinIsTTY ?? true;

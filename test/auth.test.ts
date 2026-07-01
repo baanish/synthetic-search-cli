@@ -1,10 +1,50 @@
 import assert from "node:assert/strict";
+import { chmodSync, statSync } from "node:fs";
+import { platform } from "node:os";
 import test from "node:test";
 
-import { getSavedApiKey, resolveCredentials, saveApiKey } from "../src/lib/auth.ts";
-import { runCliCapture, createTempConfigDir, removeTempConfigDir } from "./helpers.ts";
+import { getSavedApiKey, maskApiKey, resolveCredentials, saveApiKey } from "../src/lib/auth.ts";
+import {
+  runCliCapture,
+  createTempConfigDir,
+  removeTempConfigDir,
+  configFilePath,
+} from "./helpers.ts";
 
 const QUOTAS_URL = "https://api.synthetic.new/v2/quotas";
+
+test("saved credential file is created with owner-only (0600) permissions", { skip: platform() === "win32" }, async (t) => {
+  const configDir = await createTempConfigDir();
+  t.after(() => removeTempConfigDir(configDir));
+
+  saveApiKey("secret-key", { configDir });
+
+  const mode = statSync(configFilePath(configDir)).mode & 0o777;
+  assert.equal(mode, 0o600, `expected 0600, got 0o${mode.toString(8)}`);
+});
+
+test("opening an existing loosely-permissioned credential file tightens it to 0600", { skip: platform() === "win32" }, async (t) => {
+  const configDir = await createTempConfigDir();
+  t.after(() => removeTempConfigDir(configDir));
+
+  saveApiKey("upgraded-key", { configDir });
+  const file = configFilePath(configDir);
+  // Simulate a file left behind by an older version that created it 0644.
+  chmodSync(file, 0o644);
+  assert.equal(statSync(file).mode & 0o777, 0o644);
+
+  // Any operation that opens the store must tighten it.
+  assert.equal(getSavedApiKey({ configDir }), "upgraded-key");
+  assert.equal(statSync(file).mode & 0o777, 0o600);
+});
+
+test("maskApiKey reveals only the first and last four characters of a long key", () => {
+  assert.equal(maskApiKey("syn_abcdefghijklmnop"), "syn_...mnop");
+});
+
+test("maskApiKey reports empty input distinctly", () => {
+  assert.equal(maskApiKey("   "), "(empty)");
+});
 
 test("auth login saves a valid key after successful validation", async (t) => {
   const configDir = await createTempConfigDir();
@@ -192,4 +232,103 @@ test("auth status shows config source and not configured states correctly", asyn
 
   assert.equal(notConfigured.exitCode, 0);
   assert.match(notConfigured.stdout, /Credential source: not configured/);
+});
+
+test("auth status reports a failed validation and exits non-zero", async (t) => {
+  const configDir = await createTempConfigDir();
+  t.after(() => removeTempConfigDir(configDir));
+  saveApiKey("config-key", { configDir });
+
+  const result = await runCliCapture(["auth", "status"], {
+    configDir,
+    env: {},
+    fetchImpl: async () => new Response(JSON.stringify({ error: "nope" }), { status: 401 }),
+  });
+
+  assert.equal(result.exitCode, 1);
+  assert.match(result.stdout, /Validation: failed/);
+  assert.match(result.stderr, /Credential validation failed/);
+});
+
+test("auth login refuses to run without an interactive terminal", async (t) => {
+  const configDir = await createTempConfigDir();
+  t.after(() => removeTempConfigDir(configDir));
+
+  const result = await runCliCapture(["auth", "login"], {
+    configDir,
+    env: {},
+    stdinIsTTY: false,
+    stdoutIsTTY: false,
+  });
+
+  assert.equal(result.exitCode, 1);
+  assert.match(result.stderr, /requires an interactive terminal/);
+  assert.equal(getSavedApiKey({ configDir }), null);
+});
+
+test("auth login rejects an empty key entered at the prompt", async (t) => {
+  const configDir = await createTempConfigDir();
+  t.after(() => removeTempConfigDir(configDir));
+
+  const result = await runCliCapture(["auth", "login", "--no-validate"], {
+    configDir,
+    env: {},
+    stdinIsTTY: true,
+    stdoutIsTTY: true,
+    prompts: { password: async () => "   " },
+  });
+
+  assert.equal(result.exitCode, 1);
+  assert.match(result.stderr, /API key cannot be empty/);
+  assert.equal(getSavedApiKey({ configDir }), null);
+});
+
+test("auth logout reports when there is no saved key to remove", async (t) => {
+  const configDir = await createTempConfigDir();
+  t.after(() => removeTempConfigDir(configDir));
+
+  const result = await runCliCapture(["auth", "logout", "--force"], {
+    configDir,
+    env: {},
+    stdinIsTTY: false,
+    stdoutIsTTY: false,
+  });
+
+  assert.equal(result.exitCode, 0);
+  assert.match(result.stdout, /No saved API key found/);
+});
+
+test("auth logout keeps the key when the interactive confirmation is declined", async (t) => {
+  const configDir = await createTempConfigDir();
+  t.after(() => removeTempConfigDir(configDir));
+  saveApiKey("keep-me", { configDir });
+
+  const result = await runCliCapture(["auth", "logout"], {
+    configDir,
+    env: {},
+    stdinIsTTY: true,
+    stdoutIsTTY: true,
+    prompts: { confirm: async () => false },
+  });
+
+  assert.equal(result.exitCode, 0);
+  assert.match(result.stdout, /Logout cancelled/);
+  assert.equal(getSavedApiKey({ configDir }), "keep-me");
+});
+
+test("auth logout requires --force in non-interactive mode when a key exists", async (t) => {
+  const configDir = await createTempConfigDir();
+  t.after(() => removeTempConfigDir(configDir));
+  saveApiKey("keep-me", { configDir });
+
+  const result = await runCliCapture(["auth", "logout"], {
+    configDir,
+    env: {},
+    stdinIsTTY: false,
+    stdoutIsTTY: false,
+  });
+
+  assert.equal(result.exitCode, 1);
+  assert.match(result.stderr, /Use --force/);
+  assert.equal(getSavedApiKey({ configDir }), "keep-me");
 });

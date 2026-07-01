@@ -5,6 +5,13 @@ export function truncateText(value: string, maxLength: number): string {
     return value;
   }
 
+  // The ellipsis needs three characters; when the cap is too small to fit it,
+  // hard-cut instead so the result never ends up longer than maxLength (a
+  // negative slice index would otherwise keep most of the string).
+  if (maxLength <= 3) {
+    return value.slice(0, Math.max(0, maxLength));
+  }
+
   return `${value.slice(0, maxLength - 3)}...`;
 }
 
