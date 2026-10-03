@@ -2,6 +2,11 @@
 
 A user-facing CLI for Synthetic web search, quotas, and local credential management.
 
+Synthetic wraps Exa search under a zero data retention (ZDR) contract. The search
+budget is **200 queries per hour**. Synthetic does not forward many of Exa's
+upstream URL parameters, so filtering and other search controls are very limited.
+This CLI sends only the query string; `--limit` trims returned results locally.
+
 ## Features
 
 - Search the public web with Synthetic (`/v2/search`)
@@ -99,6 +104,9 @@ synthetic-search search "latest mcp updates" --limit 2
 
 ### Quotas
 
+The search budget is **200 queries per hour**. Use `quotas` to check the current
+API-reported limit, usage, remaining budget, and reset time.
+
 ```bash
 synthetic-search quotas
 synthetic-search quotas --json
@@ -110,9 +118,9 @@ actually constrains searches — is shown first, followed by the account
 
 ```text
 Search (hourly):
-  Limit: 250
+  Limit: 200
   Requests used: 38
-  Remaining: 212
+  Remaining: 162
   Renews at: 2026-06-25T21:00:02.537Z
 
 Subscription:
